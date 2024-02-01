@@ -7,7 +7,7 @@ x-default-logging: &logging
 
 networks:
   default:
-    name: opentelemetry-poc
+    name: opentelemetry-demo
     driver: bridge
 volumes:
   otel-demo: null
@@ -87,7 +87,6 @@ services:
       - ./src/tempo/tempo.yaml:/etc/tempo.yaml
       - .data/tempo:/tmp/tempo
     ports:
-      - "14268"    # jaeger ingest
       - "3200"     # tempo
       - "4317"     # OTLP over grpc
       - "4318"     # OTLP over http
@@ -138,12 +137,10 @@ services:
       - data-prepper
       - prometheus
     logging: *logging
-    environment:
-      - ENVOY_PORT
 
   # Prometheus
   prometheus:
-    image: quay.io/prometheus/prometheus:v2.48.1
+    image: quay.io/prometheus/prometheus:v2.49.1
     container_name: prometheus
     command:
       - "--web.console.templates=/etc/prometheus/consoles"
@@ -157,8 +154,10 @@ services:
       - "--enable-feature=remote-write-receiver"
       - "--enable-feature=exemplar-storage"
       - "--enable-feature=otlp-write-receiver"
+      - "--log.level=error"
     volumes:
       - ./src/prometheus/prometheus-config.yaml:/etc/prometheus/prometheus-config.yaml
+      - .data/prometheus:/prometheus
     deploy:
       resources:
         limits:
@@ -209,6 +208,7 @@ services:
     volumes:
       - ./src/opensearch/pipelines:/usr/share/data-prepper/pipelines
       - ./src/opensearch/data-prepper-config.yaml:/usr/share/data-prepper/config/data-prepper-config.yaml
+      - ./src/opensearch/log4j2-rolling.properties:/usr/share/data-prepper/config/log4j2-rolling.properties
     ports:
       - "21890" # OTLP Traces
       - "21891" # OTLP Metrics

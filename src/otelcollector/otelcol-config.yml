@@ -53,6 +53,9 @@ processors:
       - key: collector.name
         value: otelcol
         action: insert
+      - key: source
+        value: otelcol
+        action: insert
 
 extensions:
   # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension/pprofextension
@@ -107,7 +110,9 @@ service:
         #- debug
     logs:
       receivers: [otlp]
-      processors: [batch]
+      processors:
+        - attributes/collector
+        - batch
       exporters:
         - otlp/data-prepper-logs
-        - debug
+        #- debug
