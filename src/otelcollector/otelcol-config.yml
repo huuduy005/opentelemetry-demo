@@ -1,0 +1,113 @@
+receivers:
+  # Data sources: traces, metrics, logs
+  otlp:
+    protocols:
+      grpc:
+      http:
+        cors:
+          allowed_origins:
+            - "http://*"
+            - "https://*"
+  jaeger:
+    protocols:
+      thrift_compact:
+
+exporters:
+  debug:
+    verbosity: detailed
+  # Data sources: traces
+  otlp/jaeger:
+    endpoint: "jaeger:4317"
+    tls:
+      insecure: true
+  # Data sources: traces
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      insecure: true
+  # Data sources: traces
+  otlp/data-prepper-traces:
+    endpoint: "data-prepper:21890"
+    tls:
+      insecure: true
+  # Data sources: metrics
+  otlphttp/prometheus:
+    metrics_endpoint: "http://prometheus:9090/api/v1/otlp/v1/metrics"
+    tls:
+      insecure: true
+  # Data sources: metrics
+  otlp/data-prepper-metrics:
+    endpoint: "data-prepper:21891"
+    tls:
+      insecure: true
+  # Data sources: logs
+  otlp/data-prepper-logs:
+    endpoint: "data-prepper:21892"
+    tls:
+      insecure: true
+
+processors:
+  batch:
+  attributes/collector:
+    actions:
+      - key: collector.name
+        value: otelcol
+        action: insert
+
+extensions:
+  # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension/pprofextension
+  pprof:
+  # https://github.com/open-telemetry/opentelemetry-collector/tree/main/extension/zpagesextension
+  zpages:
+
+connectors:
+  spanmetrics:
+  servicegraph:
+    latency_histogram_buckets: [1ms, 2ms, 6ms, 10ms, 100ms, 250ms, 500ms, 1s, 2s] # Buckets for latency histogram
+    dimensions: [cluster, namespace] # Additional dimensions (labels) to be added to the metrics extracted from the resource and span attributes
+    store: # Configuration for the in-memory store
+      ttl: 2s # Value to wait for an edge to be completed
+      max_items: 1000 # Amount of edges that will be stored in the storeMap
+    cache_loop: 2m # the time to cleans the cache periodically
+    store_expiration_loop: 5s # the time to expire old entries from the store periodically.
+
+service:
+  telemetry:
+    logs:
+      level: info
+  extensions:
+    - pprof
+    - zpages
+  pipelines:
+    traces:
+      receivers:
+        - jaeger
+        - otlp
+      processors:
+        - attributes/collector
+        - batch
+      exporters:
+        - otlp/jaeger
+        - otlp/tempo
+        - otlp/data-prepper-traces
+        - spanmetrics
+        - servicegraph
+        #- debug
+    metrics:
+      receivers:
+        - otlp
+        - spanmetrics
+        - servicegraph
+      processors:
+        - attributes/collector
+        - batch
+      exporters:
+        - otlphttp/prometheus
+        - otlp/data-prepper-metrics
+        #- debug
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters:
+        - otlp/data-prepper-logs
+        - debug

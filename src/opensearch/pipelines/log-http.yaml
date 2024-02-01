@@ -1,0 +1,11 @@
+log-http-pipeline:
+  source:
+    http:
+      ssl: false
+  sink:
+    - opensearch:
+        hosts: [ "http://opensearch:9200" ]
+        insecure: true
+        username: admin
+        password: admin
+        index: zalopay-logs

@@ -1,0 +1,265 @@
+version: '3.8'
+x-default-logging: &logging
+  driver: "json-file"
+  options:
+    max-size: "5m"
+    max-file: "2"
+
+networks:
+  default:
+    name: opentelemetry-poc
+    driver: bridge
+volumes:
+  otel-demo: null
+
+services:
+  hotrod:
+    image: jaegertracing/example-hotrod:latest
+    container_name: hot-rod
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+      - "8082:8082"
+      - "8083:8083"
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otelcol:4318
+    depends_on:
+      - otelcol
+  # ******************
+  # Dependent Services
+  # ******************
+  redis-backend:
+    image: redis:7.2-alpine
+    container_name: redis-backend
+    user: redis
+    deploy:
+      resources:
+        limits:
+          memory: 50M
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT}"
+    logging: *logging
+
+  # ********************
+  # Telemetry Components
+  # ********************
+  fluent-bit:
+    image: fluent/fluent-bit
+    container_name: fluent-bit
+    volumes:
+      - ./src/fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf
+      - ./src/fluent-bit/parser_json.conf:/fluent-bit/etc/parser_json.conf
+      - .data/logs:/var/log
+    depends_on:
+      - data-prepper
+  # Jaeger
+  jaeger:
+    image: jaegertracing/all-in-one:1.53
+    container_name: jaeger
+    command:
+      - "--prometheus.server-url=http://${PROMETHEUS_ADDR}"
+      - "--prometheus.query.normalize-calls=true"
+      - "--prometheus.query.normalize-duration=true"
+      - "--es.server-urls=http://opensearch:9200"
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+    restart: unless-stopped
+    ports:
+      - "${JAEGER_SERVICE_PORT}:${JAEGER_SERVICE_PORT}"    # Jaeger UI
+      - "4317"                                             # OTLP over gRPC
+    depends_on:
+      - opensearch
+    environment:
+      - SPAN_STORAGE_TYPE=opensearch
+      - ES_TAGS_AS_FIELDS_ALL=true
+      - METRICS_STORAGE_TYPE=prometheus
+    logging: *logging
+
+  # Tempo
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tempo
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./src/tempo/tempo.yaml:/etc/tempo.yaml
+      - .data/tempo:/tmp/tempo
+    ports:
+      - "14268"    # jaeger ingest
+      - "3200"     # tempo
+      - "4317"     # OTLP over grpc
+      - "4318"     # OTLP over http
+    depends_on:
+      - prometheus
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: grafana
+    deploy:
+      resources:
+        limits:
+          memory: 100M
+    environment:
+      - "GF_INSTALL_PLUGINS=grafana-opensearch-datasource"
+    volumes:
+      - ./src/grafana/grafana.ini:/etc/grafana/grafana.ini
+      - ./src/grafana/provisioning/:/etc/grafana/provisioning/
+    ports:
+      - "${GRAFANA_SERVICE_PORT}:${GRAFANA_SERVICE_PORT}"
+    logging: *logging
+
+  # OpenTelemetry Collector
+  otelcol:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otelcol
+    deploy:
+      resources:
+        limits:
+          memory: 125M
+    restart: unless-stopped
+    command:
+      - "--config=/etc/otelcol-config.yml"
+      - "--config=/etc/otelcol-config-extras.yml"
+    volumes:
+      - ./src/otelcollector/otelcol-config.yml:/etc/otelcol-config.yml
+      - ./src/otelcollector/otelcol-config-extras.yml:/etc/otelcol-config-extras.yml
+    ports:
+      - "1777"              # pprof extension
+      - "55679:55679"       # zpages extension
+      - "6831:6831/udp"     # jaeger-thrift
+      - "4317:4317"         # OTLP over gRPC receiver
+      - "4318:4318"         # OTLP over HTTP receiver
+    depends_on:
+      - jaeger
+      - tempo
+      - data-prepper
+      - prometheus
+    logging: *logging
+    environment:
+      - ENVOY_PORT
+
+  # Prometheus
+  prometheus:
+    image: quay.io/prometheus/prometheus:v2.48.1
+    container_name: prometheus
+    command:
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--storage.tsdb.retention.time=1h"
+      - "--config.file=/etc/prometheus/prometheus-config.yaml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+      - "--web.route-prefix=/"
+      - "--web.enable-remote-write-receiver"
+      - "--enable-feature=remote-write-receiver"
+      - "--enable-feature=exemplar-storage"
+      - "--enable-feature=otlp-write-receiver"
+    volumes:
+      - ./src/prometheus/prometheus-config.yaml:/etc/prometheus/prometheus-config.yaml
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+    ports:
+      - "${PROMETHEUS_SERVICE_PORT}:${PROMETHEUS_SERVICE_PORT}"
+    logging: *logging
+
+  opensearch:
+    image: opensearchproject/opensearch:latest
+    container_name: opensearch
+    environment:
+      - "cluster.name=demo-cluster"
+      - "node.name=demo-node"
+      - "bootstrap.memory_lock=true"
+      - "discovery.type=single-node"
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "DISABLE_INSTALL_DEMO_CONFIG=true"
+      - "DISABLE_SECURITY_PLUGIN=true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+    volumes:
+      - .data/opensearch:/usr/share/opensearch/data
+    logging: *logging
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:latest # Make sure the version of opensearch-dashboards matches the version of opensearch installed on other nodes
+    container_name: opensearch-dashboards
+    ports:
+      - "5601:5601" # Map host port 5601 to container port 5601
+    expose:
+      - "5601" # Expose port 5601 for web access to OpenSearch Dashboards
+    environment:
+      - 'OPENSEARCH_HOSTS=["http://opensearch:9200"]' # Define the OpenSearch nodes that OpenSearch Dashboards will query
+      - "DISABLE_SECURITY_DASHBOARDS_PLUGIN=true" # disables security dashboards plugin in OpenSearch Dashboards
+
+  data-prepper:
+    image: opensearchproject/data-prepper:latest
+    container_name: data-prepper
+    platform: linux/amd64
+    volumes:
+      - ./src/opensearch/pipelines:/usr/share/data-prepper/pipelines
+      - ./src/opensearch/data-prepper-config.yaml:/usr/share/data-prepper/config/data-prepper-config.yaml
+    ports:
+      - "21890" # OTLP Traces
+      - "21891" # OTLP Metrics
+      - "21892" # OTLP Logs
+    depends_on:
+      - opensearch
+    logging: *logging
+
+  tracetest-server:
+    image: kubeshop/tracetest:v0.15.1
+    platform: linux/amd64
+    container_name: tracetest-server
+    profiles:
+      - tests
+      - odd          # Observabilty-Driven Development (ODD)
+    volumes:
+      - type: bind
+        source: ./test/tracetesting/tracetest-config.yaml
+        target: /app/tracetest.yaml
+      - type: bind
+        source: ./test/tracetesting/tracetest-provision.yaml
+        target: /app/provision.yaml
+    command: --provisioning-file /app/provision.yaml
+    ports:
+      - "11633:11633"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      tracetest-postgres:
+        condition: service_healthy
+      otelcol:
+        condition: service_started
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "localhost:11633" ]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  tracetest-postgres:
+    image: postgres:16
+    container_name: tracetest-postgres
+    profiles:
+      - tests
+      - odd          # Observabilty-Driven Development (ODD)
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    healthcheck:
+      test: pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 1s
+      timeout: 5s
+      retries: 60
+    ports:
+      - "5432"

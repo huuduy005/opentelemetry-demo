@@ -1,0 +1,19 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    url: http://prometheus:9090
+    editable: true
+    isDefault: true
+    version: 1
+    jsonData:
+      httpMethod: GET
+      exemplarTraceIdDestinations:
+        - datasourceUid: prometheus
+          name: trace_id
+
+        - url: http://localhost:8080/jaeger/ui/trace/$${__value.raw}
+          name: trace_id
+          urlDisplayLabel: View in Jaeger UI

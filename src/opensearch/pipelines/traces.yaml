@@ -1,0 +1,60 @@
+# Traces ingestion pipeline
+otel-trace-pipeline:
+  workers: 2
+  delay: "3000"
+  source:
+    otel_trace_source:
+      ssl: false
+  buffer:
+    bounded_blocking:
+      # buffer_size is the number of ExportTraceRequest from otel-collector the data prepper should hold in memeory.
+      # We recommend to keep the same buffer_size for all pipelines.
+      # Make sure you configure sufficient heap
+      buffer_size: 10240
+      # This is the maximum number of request each worker thread will process within the delay.
+      # Make sure buffer_size >= workers * batch_size
+      batch_size: 256
+  sink:
+    - pipeline:
+        name: "raw-trace-pipeline"
+    - pipeline:
+        name: "service-map-pipeline"
+raw-trace-pipeline:
+  workers: 2
+  delay: "3000"
+  source:
+    pipeline:
+      name: "otel-trace-pipeline"
+  buffer:
+    bounded_blocking:
+      buffer_size: 10240
+      batch_size: 256
+  processor:
+    - otel_traces:
+  sink:
+    - opensearch:
+        hosts: ["http://opensearch:9200"]
+        insecure: true
+        username: "admin"
+        password: "admin"
+        index_type: trace-analytics-raw
+service-map-pipeline:
+  workers: 2
+  delay: "3000"
+  source:
+    pipeline:
+      name: "otel-trace-pipeline"
+  buffer:
+    bounded_blocking:
+      buffer_size: 10240
+      batch_size: 256
+  processor:
+    - service_map:
+  sink:
+    - opensearch:
+        hosts: ["http://opensearch:9200"]
+        insecure: true
+        username: "admin"
+        password: "admin"
+        index_type: trace-analytics-service-map
+#    - stdout:

@@ -1,0 +1,44 @@
+---
+title: Data flow
+---
+flowchart LR
+    be[Application] --> otlp/grpc --> processortraces
+    fe[Application] --> otlp/http --> processortraces
+
+    subgraph receiver_trace[Receiver]
+        otlp/grpc
+        otlp/http
+    end
+
+    subgraph processortraces[Processor]
+        batch
+    end
+
+    batch --> exporter
+
+    exporter[Exporter] -- otlp/gRPC --> jaeger
+    exporter -- otlp/gRPC --> tempo[Tempo]
+    exporter -- otlp/gRPC --> data-prepper-traces[Data Prepper]
+    exporter --> connector
+    subgraph connector
+        servicegraph
+        spanmetrics
+    end
+
+    spanmetrics --> metrics
+    servicegraph --> metrics
+    subgraph processormetrics[Processor]
+        batch/metrics[batch]
+    end
+
+    metrics --> processormetrics --> exporter/metrics
+    exporter/metrics[Exporter] -- otlp/metrics ---> prometheus[(Prometheus)]
+    data-prepper-metrics -- Metrics pipeline --> opensearch
+    exporter/metrics -- otlp/metrics --> data-prepper-metrics[Data Prepper]
+
+
+    jaeger[Jaeger] -- Trace Documents --> opensearch[(Open Search)]
+    data-prepper-traces -- Trace Documents --> opensearch[(Open Search)]
+    data-prepper-traces -- ServiceGraph Documents --> opensearch[(Open Search)]
+    tempo -- Trace ---> tempo_local[(Local)]
+    tempo -- Metrics Generator ---> prometheus

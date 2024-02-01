@@ -1,0 +1,17 @@
+# Log ingestion pipeline
+otel-log-pipeline:
+  workers: 2
+  delay: "3000"
+  source:
+    otel_logs_source:
+      ssl: false
+  buffer:
+    bounded_blocking:
+      buffer_size: 10240
+      batch_size: 256
+  sink:
+    - opensearch:
+        hosts: [ "http://opensearch:9200" ]
+        insecure: true
+        index: zalopay-logs
+#    - stdout:

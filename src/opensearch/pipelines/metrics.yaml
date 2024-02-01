@@ -1,0 +1,17 @@
+# Metrics ingestion pipeline
+otel-metrics-pipeline:
+  workers: 2
+  delay: "3000"
+  source:
+    otel_metrics_source:
+      ssl: false
+      health_check_service: true
+      proto_reflection_service: true
+  processor:
+    - otel_metrics:
+  sink:
+    - opensearch:
+        hosts: [ "http://opensearch:9200" ]
+        insecure: true
+        index: zalopay-metrics
+#    - stdout:
